@@ -1,0 +1,73 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace = "com.abdelnaser.athar"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.abdelnaser.athar"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode System.getenv("NOOR_VERSION_CODE") ? System.getenv("NOOR_VERSION_CODE").toInteger() : (System.getenv("GITHUB_RUN_NUMBER") ? System.getenv("GITHUB_RUN_NUMBER").toInteger() : 1)
+        versionName "2." + file("../native-level.txt").text.trim() + "." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        upload {
+            // مفتاح الرفع على Google Play: يُقرأ من أسرار GitHub فقط ولا يُحفظ في المستودع
+            storeFile file(System.getenv("NOOR_UPLOAD_KEYSTORE") ?: 'noor.keystore')
+            storePassword System.getenv("NOOR_UPLOAD_PASSWORD") ?: 'noorapp'
+            keyAlias System.getenv("NOOR_UPLOAD_KEYSTORE") ? 'upload' : 'noor'
+            keyPassword System.getenv("NOOR_UPLOAD_PASSWORD") ?: 'noorapp'
+        }
+        noor {
+            storeFile file('noor.keystore')
+            storePassword 'noorapp'
+            keyAlias 'noor'
+            keyPassword 'noorapp'
+        }
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.noor
+        }
+        release {
+            signingConfig System.getenv("NOOR_UPLOAD_KEYSTORE") ? signingConfigs.upload : signingConfigs.noor
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

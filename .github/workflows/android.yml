@@ -1,0 +1,111 @@
+name: بناء تطبيق أندرويد
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: تثبيت الحزم
+        run: npm ci
+
+      - name: رقم الإصدار
+        run: |
+          # رقم يزيد دائماً (بالدقائق منذ ٢٠٢٦) ليُثبَّت كل تحديث فوق النسخة السابقة
+          echo "NOOR_VERSION_CODE=$(( ($(date +%s) - 1767225600) / 60 ))" >> "$GITHUB_ENV"
+          echo "NOOR_NATIVE_LEVEL=$(cat android/native-level.txt | tr -d '[:space:]')" >> "$GITHUB_ENV"
+          echo "NOOR_MIN_NATIVE=$(cat android/min-native-level.txt | tr -d '[:space:]')" >> "$GITHUB_ENV"
+          echo "NOOR_BUILD_KIND=public" >> "$GITHUB_ENV"
+
+      - name: تجهيز ملفات التطبيق
+        run: |
+          npm run build:web
+          # حزمة المحتوى للتحديث في الخلفية داخل التطبيق
+          (cd www && zip -qr ../web.zip .)
+          echo "NOOR_WEB_SHA256=$(sha256sum web.zip | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: صوت الأذان المخصص (إن وُجد)
+        run: |
+          if [ -f adhan/adhan.mp3 ]; then
+            mkdir -p android/app/src/main/res/raw
+            cp adhan/adhan.mp3 android/app/src/main/res/raw/adhan.mp3
+            echo "تم إضافة صوت الأذان"
+          fi
+
+      - name: مزامنة Capacitor
+        run: npx cap sync android
+
+      - name: بناء APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+          cp app/build/outputs/apk/release/app-release.apk ../athar.apk
+          cp ../athar.apk ../noor.apk  # للروابط القديمة
+
+      - name: بناء حزمة Google Play (AAB)
+        working-directory: android
+        env:
+          UPLOAD_B64: ${{ secrets.NOOR_UPLOAD_KEYSTORE_B64 }}
+          NOOR_UPLOAD_PASSWORD: ${{ secrets.NOOR_UPLOAD_PASSWORD }}
+        run: |
+          if [ -z "$UPLOAD_B64" ]; then
+            echo "::warning::لم تتم إضافة مفتاح الرفع إلى أسرار GitHub، لن تُبنى حزمة Google Play"
+            exit 0
+          fi
+          echo "$UPLOAD_B64" | base64 -d > "$RUNNER_TEMP/upload.keystore"
+          export NOOR_UPLOAD_KEYSTORE="$RUNNER_TEMP/upload.keystore"
+          ./gradlew bundleRelease --no-daemon
+          cp app/build/outputs/bundle/release/app-release.aab ../noor-play.aab
+          rm -f "$RUNNER_TEMP/upload.keystore"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: athar-apk
+          path: |
+            athar.apk
+            noor-play.aab
+
+      - name: نشر الإصدار
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.run_number }}
+          name: "أثر - تطبيق أندرويد (إصدار ${{ github.run_number }})"
+          body: |
+            تطبيق أثر - رفيق المسلم
+            صدقة جارية على روح المرحوم عبدالناصر عمران
+
+            حمّل ملف athar.apk وثبّته على هاتفك.
+
+            VERSION_CODE=${{ env.NOOR_VERSION_CODE }}
+            WEB_CODE=${{ env.NOOR_VERSION_CODE }}
+            NATIVE_LEVEL=${{ env.NOOR_MIN_NATIVE }}
+            WEB_SHA256=${{ env.NOOR_WEB_SHA256 }}
+          files: |
+            athar.apk
+            noor.apk
+            web.zip
+            noor-play.aab
+          fail_on_unmatched_files: false
+          make_latest: true
